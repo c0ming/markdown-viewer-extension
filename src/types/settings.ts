@@ -9,6 +9,7 @@
  */
 export type SettingKey = 
   | 'themeId'
+  | 'layoutMode'
   | 'tableMergeEmpty'
   | 'tableLayout'
   | 'swapPanelSide'
@@ -22,6 +23,7 @@ export type SettingKey =
  */
 export interface SettingTypes {
   themeId: string;
+  layoutMode: 'normal' | 'fullscreen' | 'narrow';
   tableMergeEmpty: boolean;
   tableLayout: 'left' | 'center';
   swapPanelSide: boolean;
@@ -36,6 +38,7 @@ export interface SettingTypes {
  */
 export const DEFAULT_SETTINGS: SettingTypes = {
   themeId: 'default',
+  layoutMode: 'normal',
   tableMergeEmpty: true,
   tableLayout: 'center',
   swapPanelSide: false,

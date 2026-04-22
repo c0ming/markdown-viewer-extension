@@ -5,6 +5,7 @@
 
 import type { TranslateFunction, EscapeHtmlFunction, FileState } from './core';
 import type { DocxExporter } from './docx';
+import type { SettingTypes } from './settings';
 
 // =============================================================================
 // Layout Types
@@ -31,6 +32,8 @@ export interface ToolbarManagerOptions {
   escapeHtml: EscapeHtmlFunction;
   saveFileState: (state: FileState) => void;
   getFileState: () => Promise<FileState>;
+  saveLayoutMode: (layout: SettingTypes['layoutMode']) => Promise<void>;
+  initialLayoutMode: SettingTypes['layoutMode'];
   isMobile: boolean;
   rawMarkdown: string;
   docxExporter: DocxExporter;

@@ -84,3 +84,4 @@ src/fonts/*.ttf
 !src/fonts/.gitkeep
 .agent/*
 .agents/*
+.chrome-build-seq.json

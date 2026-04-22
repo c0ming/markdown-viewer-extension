@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build:chrome": "node chrome/build.js",
+    "build:chrome:zip": "node chrome/build.js --zip",
     "build:firefox": "node firefox/build.js",
     "build:mobile": "node mobile/build.js",
     "build:slidev": "cd slidev-shell && npx vite build --config vite.vscode.config.ts",

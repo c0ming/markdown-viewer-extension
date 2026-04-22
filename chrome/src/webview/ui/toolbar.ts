@@ -13,6 +13,7 @@ import type {
   FileState,
   DocxExporter,
   LayoutConfig,
+  SettingTypes,
   ToolbarManagerOptions,
   ToolbarManagerInstance,
   GenerateToolbarHTMLOptions
@@ -45,6 +46,8 @@ export function createToolbarManager(options: ToolbarManagerOptions): ToolbarMan
     escapeHtml,
     saveFileState,
     getFileState,
+    saveLayoutMode,
+    initialLayoutMode,
     isMobile,
     rawMarkdown,
     docxExporter,
@@ -305,11 +308,11 @@ export function createToolbarManager(options: ToolbarManagerOptions): ToolbarMan
     // Layout toggle button
     const layoutBtn = document.getElementById('layout-toggle-btn');
     const pageDiv = document.getElementById('markdown-page');
-    let currentLayout = 'normal'; // normal, fullscreen, narrow
-    const layoutSequence = ['normal', 'fullscreen', 'narrow'];
+    let currentLayout: SettingTypes['layoutMode'] = 'normal';
+    const layoutSequence: SettingTypes['layoutMode'][] = ['normal', 'fullscreen', 'narrow'];
 
     if (layoutBtn && pageDiv) {
-      const applyLayout = (layout: string, saveState = true): void => {
+      const applyLayout = (layout: SettingTypes['layoutMode'], saveState = true): void => {
         const config = layoutConfigs[layout];
         if (!config) {
           return;
@@ -321,11 +324,11 @@ export function createToolbarManager(options: ToolbarManagerOptions): ToolbarMan
         
         // Save layout mode
         if (saveState) {
-          saveFileState({ layoutMode: layout });
+          void saveLayoutMode(layout);
         }
       };
 
-      applyLayout('normal', false);
+      applyLayout(initialLayoutMode, false);
 
       layoutBtn.addEventListener('click', () => {
         if (!layoutSequence.includes(currentLayout)) {
@@ -338,13 +341,8 @@ export function createToolbarManager(options: ToolbarManagerOptions): ToolbarMan
         applyLayout(nextLayout);
       });
       
-      // Restore layout and zoom state after toolbar setup
+      // Restore zoom state after toolbar setup
       (async () => {
-        // Restore layout mode
-        if (savedState.layoutMode && layoutConfigs[savedState.layoutMode]) {
-          applyLayout(savedState.layoutMode, false);
-        }
-        
         // Restore zoom level
         if (savedState.zoom && typeof savedState.zoom === 'number') {
           applyZoom(savedState.zoom, false);

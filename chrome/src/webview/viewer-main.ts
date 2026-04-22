@@ -155,6 +155,9 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
   const getFileState = (): Promise<FileState> => {
     return platform.fileState.get(currentUrl);
   };
+  const saveLayoutMode = (layoutMode: 'normal' | 'fullscreen' | 'narrow'): Promise<void> => {
+    return platform.settings.set('layoutMode', layoutMode, { refresh: false });
+  };
 
   // Initialize scroll sync controller using shared utility
   let scrollSyncController: ScrollSyncController | null = null;
@@ -289,8 +292,11 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
   };
 
   type LayoutMode = keyof LayoutConfigs;
+  const savedGlobalLayout = await platform.settings.get('layoutMode');
   const initialLayout: LayoutMode =
-    initialState.layoutMode && layoutConfigs[initialState.layoutMode as LayoutMode]
+    savedGlobalLayout && layoutConfigs[savedGlobalLayout]
+      ? savedGlobalLayout
+      : initialState.layoutMode && layoutConfigs[initialState.layoutMode as LayoutMode]
       ? (initialState.layoutMode as LayoutMode)
       : 'normal';
   const initialMaxWidth = layoutConfigs[initialLayout].maxWidth;
@@ -314,6 +320,8 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
     escapeHtml,
     saveFileState,
     getFileState,
+    saveLayoutMode,
+    initialLayoutMode: initialLayout,
     isMobile,
     rawMarkdown,
     docxExporter,

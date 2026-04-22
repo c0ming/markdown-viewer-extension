@@ -7,9 +7,14 @@ import Localization, { DEFAULT_SETTING_LOCALE } from '../../../src/utils/localiz
 import { applyI18nText } from '../../../src/ui/popup/i18n-helpers';
 import { chevronRight, chevronDown, folderClosed, folderOpen, folderPlus, searchIcon, fileSearchIcon, textSearchIcon, getFileIcon } from './file-icons';
 import themeManager from '../../../src/utils/theme-manager';
+import type { HistoryEntry } from '../../../src/types/index';
 
 const webExtensionApi = getWebExtensionApi();
 const VIEWER_URL = webExtensionApi.runtime.getURL('ui/workspace/viewer-embed.html');
+const treeNodeCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+});
 
 const SUPPORTED_EXTENSIONS = new Set([
   'md', 'markdown', 'slides.md',
@@ -54,7 +59,7 @@ const $recentList = document.getElementById('recent-list')!;
 
 let rootDirHandle: FileSystemDirectoryHandle | null = null;
 let currentFileDir = '';
-let swapPanelSide = false;
+let swapPanelSide = true;
 let activeFilePath = '';
 let currentSearchQuery = '';
 let workspaceTree: TreeNode[] = [];
@@ -64,19 +69,104 @@ let contentSearchResults: ContentSearchResult[] = [];
 let lastExecutedContentQuery = '';
 let contentSearchInProgress = false;
 let contentSearchRunId = 0;
+let workspaceStorageMessageId = 0;
+
+function sendStorageMessage<T>(type: 'STORAGE_GET' | 'STORAGE_SET', payload: unknown): Promise<T> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      {
+        id: `workspace-storage-${Date.now()}-${++workspaceStorageMessageId}`,
+        type,
+        payload,
+        timestamp: Date.now(),
+        source: 'workspace-storage',
+      },
+      (response: unknown) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        const envelope = response as {
+          type?: string;
+          ok?: boolean;
+          data?: T;
+          error?: { message?: string };
+        } | undefined;
+
+        if (!envelope || envelope.type !== 'RESPONSE') {
+          reject(new Error('Unexpected response format (expected ResponseEnvelope)'));
+          return;
+        }
+
+        if (!envelope.ok) {
+          reject(new Error(envelope.error?.message || 'Unknown storage error'));
+          return;
+        }
+
+        resolve(envelope.data as T);
+      }
+    );
+  });
+}
+
+async function storageGet(keys: string[]): Promise<Record<string, unknown>> {
+  return sendStorageMessage<Record<string, unknown>>('STORAGE_GET', { keys });
+}
+
+async function storageSet(items: Record<string, unknown>): Promise<void> {
+  await sendStorageMessage<{ success: boolean }>('STORAGE_SET', { items });
+}
+
+function buildWorkspaceHistoryUrl(workspaceName: string, filePath: string): string {
+  const url = new URL(webExtensionApi.runtime.getURL('ui/workspace/workspace.html'));
+  url.searchParams.set('workspace', workspaceName);
+  url.searchParams.set('file', filePath);
+  return url.toString();
+}
+
+async function saveWorkspaceFileToHistory(filePath: string): Promise<void> {
+  if (!rootDirHandle) {
+    return;
+  }
+
+  try {
+    const url = buildWorkspaceHistoryUrl(rootDirHandle.name, filePath);
+    const title = filePath;
+    const result = await storageGet(['markdownHistory']) as { markdownHistory?: HistoryEntry[] };
+    const history = result.markdownHistory || [];
+    const filteredHistory = history.filter((item) => item.url !== url);
+
+    filteredHistory.unshift({
+      url,
+      title,
+      lastAccess: new Date().toISOString(),
+    });
+
+    await storageSet({
+      markdownHistory: filteredHistory.slice(0, 100),
+    });
+  } catch (error) {
+    console.error('[Workspace] Failed to save history:', error);
+  }
+}
 
 function applyWorkspacePanelSide(swapped: boolean): void {
   swapPanelSide = swapped;
   $workspace.classList.toggle('sidebar-left', swapped);
 }
 
+function resolveSwapPanelSide(stored?: boolean): boolean {
+  return stored ?? true;
+}
+
 async function loadWorkspacePanelSide(): Promise<void> {
   try {
     const result = await webExtensionApi.storage.local.get(['markdownViewerSettings']);
     const stored = result.markdownViewerSettings as { swapPanelSide?: boolean } | undefined;
-    applyWorkspacePanelSide(Boolean(stored?.swapPanelSide));
+    applyWorkspacePanelSide(resolveSwapPanelSide(stored?.swapPanelSide));
   } catch {
-    applyWorkspacePanelSide(false);
+    applyWorkspacePanelSide(true);
   }
 }
 
@@ -195,6 +285,20 @@ function showBinaryFileMessage(): void {
   }
 }
 
+function compareTreeNodes(a: TreeNode, b: TreeNode): number {
+  if (a.kind !== b.kind) {
+    return a.kind === 'directory' ? -1 : 1;
+  }
+
+  const naturalOrder = treeNodeCollator.compare(a.name, b.name);
+  if (naturalOrder !== 0) {
+    return naturalOrder;
+  }
+
+  // Keep a deterministic order when names differ only by case/accents.
+  return a.name.localeCompare(b.name);
+}
+
 // ─── Directory traversal (single level) ───
 async function readDirectory(dirHandle: FileSystemDirectoryHandle, parentPath = ''): Promise<TreeNode[]> {
   const entries: TreeNode[] = [];
@@ -203,11 +307,8 @@ async function readDirectory(dirHandle: FileSystemDirectoryHandle, parentPath = 
     const path = parentPath + name + (handle.kind === 'directory' ? '/' : '');
     entries.push({ name, kind: handle.kind, handle, path });
   }
-  // Sort: directories first, then alphabetical
-  entries.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === 'directory' ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
+  // Sort: directories first, then natural alphabetical order.
+  entries.sort(compareTreeNodes);
 
   for (const entry of entries) {
     if (entry.kind === 'directory') {
@@ -267,6 +368,24 @@ function flattenFileNodes(nodes: TreeNode[]): TreeNode[] {
   }
 
   return files;
+}
+
+function isMarkdownWorkspaceFile(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return lowerName.endsWith('.slides.md') || lowerName.endsWith('.md') || lowerName.endsWith('.markdown');
+}
+
+async function openFirstMarkdownFile(): Promise<boolean> {
+  const firstMarkdownNode = flattenFileNodes(workspaceTree).find((node) => isMarkdownWorkspaceFile(node.name));
+  if (!firstMarkdownNode) {
+    return false;
+  }
+
+  activeFilePath = firstMarkdownNode.path;
+  currentFileDir = getParentDirFromPath(firstMarkdownNode.path);
+  renderTreeView();
+  await openFile(firstMarkdownNode.handle as FileSystemFileHandle);
+  return true;
 }
 
 function extractContentSnippet(content: string, query: string): string {
@@ -622,9 +741,11 @@ function sendToViewer(content: string, filename: string, codeView = false) {
 async function openFile(fileHandle: FileSystemFileHandle) {
   const file = await fileHandle.getFile();
   const name = fileHandle.name;
+  const filePath = currentFileDir + name;
 
   // Save last opened file path
-  localStorage.setItem(`workspace-last-file:${rootDirHandle?.name}`, currentFileDir + name);
+  localStorage.setItem(`workspace-last-file:${rootDirHandle?.name}`, filePath);
+  await saveWorkspaceFileToHistory(filePath);
 
   if (isSupportedFile(name)) {
     const text = await file.text();
@@ -644,7 +765,7 @@ async function openFile(fileHandle: FileSystemFileHandle) {
 }
 
 // ─── Open workspace ───
-async function openWorkspace(dirHandle: FileSystemDirectoryHandle) {
+async function openWorkspace(dirHandle: FileSystemDirectoryHandle, preferredFilePath?: string) {
   $landing.style.display = 'none';
   $workspace.style.display = 'flex';
   $workspaceName.textContent = dirHandle.name;
@@ -665,6 +786,23 @@ async function openWorkspace(dirHandle: FileSystemDirectoryHandle) {
 
   // Mark this tab as having an active workspace (for refresh detection)
   sessionStorage.setItem('workspace-active', dirHandle.name);
+
+  if (preferredFilePath) {
+    const restoredPreferredFile = await restoreLastFile(preferredFilePath);
+    if (restoredPreferredFile) {
+      return;
+    }
+  }
+
+  const lastFile = localStorage.getItem(`workspace-last-file:${dirHandle.name}`);
+  if (lastFile) {
+    const restored = await restoreLastFile(lastFile);
+    if (restored) {
+      return;
+    }
+  }
+
+  await openFirstMarkdownFile();
 }
 
 // ─── Recent workspaces (IndexedDB) ───
@@ -803,17 +941,17 @@ window.addEventListener('message', async (event: MessageEvent) => {
 });
 
 // ─── Restore last file ───
-async function restoreLastFile(filePath: string): Promise<void> {
-  if (!rootDirHandle) return;
+async function restoreLastFile(filePath: string): Promise<boolean> {
+  if (!rootDirHandle) return false;
   const segments = filePath.split('/').filter(Boolean);
-  if (segments.length === 0) return;
+  if (segments.length === 0) return false;
   const fileName = segments[segments.length - 1];
   const dirPath = segments.length > 1 ? segments.slice(0, -1).join('/') + '/' : '';
 
   let dir = rootDirHandle;
   for (let i = 0; i < segments.length - 1; i++) {
     try { dir = await dir.getDirectoryHandle(segments[i]); }
-    catch { return; }
+    catch { return false; }
   }
   try {
     const fh = await dir.getFileHandle(fileName);
@@ -821,7 +959,10 @@ async function restoreLastFile(filePath: string): Promise<void> {
     activeFilePath = filePath;
     renderTreeView();
     await openFile(fh);
-  } catch { /* file no longer exists */ }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ─── Restore last workspace on refresh ───
@@ -843,11 +984,6 @@ async function restoreLastWorkspace(): Promise<boolean> {
           const perm = await item.handle.queryPermission({ mode: 'read' });
           if (perm === 'granted') {
             await openWorkspace(item.handle);
-            // Restore last opened file
-            const lastFile = localStorage.getItem(`workspace-last-file:${item.handle.name}`);
-            if (lastFile) {
-              await restoreLastFile(lastFile);
-            }
             resolve(true);
             return;
           }
@@ -857,6 +993,50 @@ async function restoreLastWorkspace(): Promise<boolean> {
       req.onerror = () => resolve(false);
     });
   } catch { return false; }
+}
+
+async function openRequestedWorkspaceFromUrl(): Promise<boolean> {
+  const params = new URLSearchParams(window.location.search);
+  const workspaceName = params.get('workspace');
+  const filePath = params.get('file');
+  if (!workspaceName) {
+    return false;
+  }
+
+  try {
+    const db = await openDB();
+    const tx = db.transaction('recent', 'readonly');
+    const store = tx.objectStore('recent');
+    const req = store.get(workspaceName);
+    return await new Promise((resolve) => {
+      req.onsuccess = async () => {
+        const item = req.result;
+        if (!item) {
+          resolve(false);
+          return;
+        }
+
+        try {
+          const queriedPermission = await item.handle.queryPermission({ mode: 'read' });
+          const permission = queriedPermission === 'granted'
+            ? queriedPermission
+            : await item.handle.requestPermission({ mode: 'read' });
+          if (permission === 'granted') {
+            await openWorkspace(item.handle, filePath || undefined);
+            resolve(true);
+            return;
+          }
+        } catch {
+          // Ignore expired handles / denied permission.
+        }
+
+        resolve(false);
+      };
+      req.onerror = () => resolve(false);
+    });
+  } catch {
+    return false;
+  }
 }
 
 // ─── Init ───
@@ -888,7 +1068,7 @@ Localization.init().then(async () => {
 
       const oldSettings = changes.markdownViewerSettings.oldValue as { swapPanelSide?: boolean; preferredLocale?: string } | undefined;
       const nextSettings = changes.markdownViewerSettings.newValue as { swapPanelSide?: boolean; preferredLocale?: string } | undefined;
-      applyWorkspacePanelSide(Boolean(nextSettings?.swapPanelSide));
+      applyWorkspacePanelSide(resolveSwapPanelSide(nextSettings?.swapPanelSide));
 
       const oldLocale = oldSettings?.preferredLocale ?? DEFAULT_SETTING_LOCALE;
       const nextLocale = nextSettings?.preferredLocale ?? DEFAULT_SETTING_LOCALE;
@@ -923,7 +1103,8 @@ Localization.init().then(async () => {
   });
 
   applyI18nText();
-  const restored = await restoreLastWorkspace();
+  const openedFromHistory = await openRequestedWorkspaceFromUrl();
+  const restored = openedFromHistory ? true : await restoreLastWorkspace();
   if (!restored) {
     loadRecentWorkspaces();
   }

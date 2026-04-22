@@ -184,7 +184,29 @@ export async function initializePopup(): Promise<void> {
     const manifest = chrome.runtime.getManifest();
     
     const versionEl = document.getElementById('version-text');
-    if (versionEl && manifest.version) {
+
+    try {
+      const buildInfoResponse = await fetch(chrome.runtime.getURL('build-info.json'));
+      if (buildInfoResponse.ok) {
+        const buildInfo = await buildInfoResponse.json() as {
+          version?: string;
+          buildNumber?: number;
+          manifestVersion?: string;
+        };
+        if (versionEl && buildInfo.version) {
+          versionEl.dataset.i18nArgs = buildInfo.version;
+        }
+        const buildIdEl = document.getElementById('build-id-text');
+        if (buildIdEl && Number.isInteger(buildInfo.buildNumber)) {
+          buildIdEl.textContent = `(.${buildInfo.buildNumber})`;
+          buildIdEl.hidden = false;
+        }
+      }
+    } catch {
+      // Ignore missing build metadata in older builds.
+    }
+
+    if (versionEl && !versionEl.dataset.i18nArgs && manifest.version) {
       versionEl.dataset.i18nArgs = manifest.version;
     }
 
