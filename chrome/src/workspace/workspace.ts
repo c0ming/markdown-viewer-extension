@@ -707,7 +707,7 @@ async function resolveFileFromRoot(path: string): Promise<File | null> {
 }
 
 // ─── File preview via embedded viewer ───
-function sendToViewer(content: string, filename: string, codeView = false) {
+function sendToViewer(content: string, filename: string, codeView = false, fragment?: string) {
   // Hide the iframe while it navigates + renders. The iframe element's blank
   // frame during src reset would otherwise flash the default UA white (or
   // the iframe body's unthemed background). The preview-pane behind it is
@@ -726,6 +726,7 @@ function sendToViewer(content: string, filename: string, codeView = false) {
         filename,
         fileDir: currentFileDir,
         codeView,
+        fragment,
       }, '*');
       return;
     }
@@ -738,7 +739,7 @@ function sendToViewer(content: string, filename: string, codeView = false) {
   window.addEventListener('message', onMessage);
 }
 
-async function openFile(fileHandle: FileSystemFileHandle) {
+async function openFile(fileHandle: FileSystemFileHandle, fragment?: string) {
   const file = await fileHandle.getFile();
   const name = fileHandle.name;
   const filePath = currentFileDir + name;
@@ -749,7 +750,7 @@ async function openFile(fileHandle: FileSystemFileHandle) {
 
   if (isSupportedFile(name)) {
     const text = await file.text();
-    sendToViewer(text, name);
+    sendToViewer(text, name, false, fragment);
     return;
   }
 
@@ -757,7 +758,7 @@ async function openFile(fileHandle: FileSystemFileHandle) {
     // Code/text files: wrap in code block using extension as language tag
     const text = await file.text();
     const ext = name.slice(name.lastIndexOf('.') + 1);
-    sendToViewer(`\`\`\`${ext}\n${text.trimEnd()}\n\`\`\``, name, true);
+    sendToViewer(`\`\`\`${ext}\n${text.trimEnd()}\n\`\`\``, name, true, fragment);
     return;
   }
 
@@ -765,7 +766,11 @@ async function openFile(fileHandle: FileSystemFileHandle) {
 }
 
 // ─── Open workspace ───
-async function openWorkspace(dirHandle: FileSystemDirectoryHandle, preferredFilePath?: string) {
+async function openWorkspace(
+  dirHandle: FileSystemDirectoryHandle,
+  preferredFilePath?: string,
+  preferredFragment?: string,
+) {
   $landing.style.display = 'none';
   $workspace.style.display = 'flex';
   $workspaceName.textContent = dirHandle.name;
@@ -788,7 +793,7 @@ async function openWorkspace(dirHandle: FileSystemDirectoryHandle, preferredFile
   sessionStorage.setItem('workspace-active', dirHandle.name);
 
   if (preferredFilePath) {
-    const restoredPreferredFile = await restoreLastFile(preferredFilePath);
+    const restoredPreferredFile = await restoreLastFile(preferredFilePath, preferredFragment);
     if (restoredPreferredFile) {
       return;
     }
@@ -911,6 +916,60 @@ window.addEventListener('message', async (event: MessageEvent) => {
     return;
   }
 
+  if (event.data?.type === 'OPEN_RELATIVE_FILE') {
+    const { path, fragment } = event.data as { path?: string; fragment?: string };
+    if (!path || !rootDirHandle) {
+      console.debug('[workspace] relative navigation ignored', {
+        path,
+        hasRootDirHandle: Boolean(rootDirHandle),
+      });
+      return;
+    }
+
+    const resolved = resolveRelativePath(currentFileDir, path);
+    const segments = resolved.split('/').filter(Boolean);
+    console.debug('[workspace] relative navigation requested', {
+      currentFileDir,
+      path,
+      resolved,
+      fragment,
+      segments,
+    });
+    if (segments.length === 0) {
+      console.debug('[workspace] relative navigation aborted: empty resolved path');
+      return;
+    }
+
+    const fileName = segments[segments.length - 1];
+    const dirPath = segments.length > 1 ? `${segments.slice(0, -1).join('/')}/` : '';
+
+    try {
+      let dir = rootDirHandle;
+      for (let i = 0; i < segments.length - 1; i++) {
+        dir = await dir.getDirectoryHandle(segments[i]);
+      }
+      const handle = await dir.getFileHandle(fileName);
+      console.debug('[workspace] relative navigation resolved handle', {
+        fileName,
+        dirPath,
+      });
+      currentFileDir = dirPath;
+      activeFilePath = resolved;
+      renderTreeView();
+      await openFile(handle, fragment);
+      console.debug('[workspace] relative navigation opened file', {
+        activeFilePath,
+        fragment,
+      });
+    } catch {
+      console.debug('[workspace] relative navigation failed to resolve target', {
+        resolved,
+        fileName,
+      });
+    }
+    return;
+  }
+
   // File read requests from DocumentService.readRelativeFile (SVG plugin, DOCX export, etc.)
   if (event.data?.type === 'RESOLVE_FILE') {
     const { path, id, binary } = event.data;
@@ -941,7 +1000,7 @@ window.addEventListener('message', async (event: MessageEvent) => {
 });
 
 // ─── Restore last file ───
-async function restoreLastFile(filePath: string): Promise<boolean> {
+async function restoreLastFile(filePath: string, fragment?: string): Promise<boolean> {
   if (!rootDirHandle) return false;
   const segments = filePath.split('/').filter(Boolean);
   if (segments.length === 0) return false;
@@ -958,7 +1017,7 @@ async function restoreLastFile(filePath: string): Promise<boolean> {
     currentFileDir = dirPath;
     activeFilePath = filePath;
     renderTreeView();
-    await openFile(fh);
+    await openFile(fh, fragment);
     return true;
   } catch {
     return false;
@@ -999,6 +1058,7 @@ async function openRequestedWorkspaceFromUrl(): Promise<boolean> {
   const params = new URLSearchParams(window.location.search);
   const workspaceName = params.get('workspace');
   const filePath = params.get('file');
+  const fragment = params.get('fragment');
   if (!workspaceName) {
     return false;
   }
@@ -1022,7 +1082,7 @@ async function openRequestedWorkspaceFromUrl(): Promise<boolean> {
             ? queriedPermission
             : await item.handle.requestPermission({ mode: 'read' });
           if (permission === 'granted') {
-            await openWorkspace(item.handle, filePath || undefined);
+            await openWorkspace(item.handle, filePath || undefined, fragment || undefined);
             resolve(true);
             return;
           }

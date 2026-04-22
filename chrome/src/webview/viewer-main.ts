@@ -350,7 +350,7 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
   if (!initialTocVisible) {
     document.body.classList.add('toc-hidden');
   }
-  applyTocPanelSide(Boolean(initialSwapPanelSide));
+  applyTocPanelSide(!Boolean(initialSwapPanelSide));
 
   // Initialize scroll sync controller immediately after DOM is ready
   initScrollSyncController();
@@ -521,7 +521,7 @@ export async function initializeViewerMain(options: ViewerMainOptions): Promise<
         if (key === 'themeId' && typeof value === 'string') {
           void handleSetTheme(value);
         } else if (key === 'swapPanelSide') {
-          applyTocPanelSide(Boolean(value));
+          applyTocPanelSide(!Boolean(value));
         } else {
           // Other settings changed - just re-render with scroll preservation
           const scrollLine = scrollSyncController?.getCurrentLine() ?? 0;
