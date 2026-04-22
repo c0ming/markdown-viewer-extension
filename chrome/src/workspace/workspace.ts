@@ -53,6 +53,7 @@ const $searchModeToggle = document.getElementById('search-mode-toggle')!;
 const $fileSearchInput = document.getElementById('file-search-input') as HTMLInputElement;
 const $previewEmpty = document.getElementById('preview-empty')!;
 const $previewFrame = document.getElementById('preview-frame') as HTMLIFrameElement;
+const $nextMarkdownBtn = document.getElementById('next-markdown-btn') as HTMLButtonElement;
 const $previewEmptyText = $previewEmpty.querySelector('p');
 const $recentWorkspaces = document.getElementById('recent-workspaces')!;
 const $recentList = document.getElementById('recent-list')!;
@@ -386,6 +387,25 @@ async function openFirstMarkdownFile(): Promise<boolean> {
   renderTreeView();
   await openFile(firstMarkdownNode.handle as FileSystemFileHandle);
   return true;
+}
+
+function getNextMarkdownNode(currentPath: string): TreeNode | null {
+  const markdownNodes = flattenFileNodes(workspaceTree).filter((node) => isMarkdownWorkspaceFile(node.name));
+  if (markdownNodes.length === 0) {
+    return null;
+  }
+
+  const currentIndex = markdownNodes.findIndex((node) => node.path === currentPath);
+  if (currentIndex === -1) {
+    return markdownNodes[0];
+  }
+
+  return markdownNodes[currentIndex + 1] || null;
+}
+
+function updateNextMarkdownButton(): void {
+  const nextNode = getNextMarkdownNode(activeFilePath);
+  $nextMarkdownBtn.style.display = nextNode ? 'inline-flex' : 'none';
 }
 
 function extractContentSnippet(content: string, query: string): string {
@@ -747,6 +767,7 @@ async function openFile(fileHandle: FileSystemFileHandle, fragment?: string) {
   // Save last opened file path
   localStorage.setItem(`workspace-last-file:${rootDirHandle?.name}`, filePath);
   await saveWorkspaceFileToHistory(filePath);
+  updateNextMarkdownButton();
 
   if (isSupportedFile(name)) {
     const text = await file.text();
@@ -781,6 +802,7 @@ async function openWorkspace(
   $previewEmpty.style.display = '';
   $previewFrame.style.display = 'none';
   $previewFrame.src = 'about:blank';
+  updateNextMarkdownButton();
 
   rootDirHandle = dirHandle;
   workspaceTree = await readDirectory(dirHandle, '');
@@ -877,6 +899,17 @@ async function pickAndOpen() {
 
 $pickBtn.addEventListener('click', pickAndOpen);
 $changeBtn.addEventListener('click', pickAndOpen);
+$nextMarkdownBtn.addEventListener('click', async () => {
+  const nextNode = getNextMarkdownNode(activeFilePath);
+  if (!nextNode) {
+    return;
+  }
+
+  currentFileDir = getParentDirFromPath(nextNode.path);
+  activeFilePath = nextNode.path;
+  renderTreeView();
+  await openFile(nextNode.handle as FileSystemFileHandle);
+});
 $toggleSearchBtn.addEventListener('click', toggleSearch);
 $searchModeToggle.addEventListener('click', toggleSearchMode);
 $fileSearchInput.addEventListener('input', () => {
@@ -967,6 +1000,19 @@ window.addEventListener('message', async (event: MessageEvent) => {
         fileName,
       });
     }
+    return;
+  }
+
+  if (event.data?.type === 'OPEN_NEXT_MARKDOWN_FILE') {
+    const nextNode = getNextMarkdownNode(activeFilePath);
+    if (!nextNode) {
+      return;
+    }
+
+    currentFileDir = getParentDirFromPath(nextNode.path);
+    activeFilePath = nextNode.path;
+    renderTreeView();
+    await openFile(nextNode.handle as FileSystemFileHandle);
     return;
   }
 
