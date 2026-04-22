@@ -371,6 +371,19 @@ function flattenFileNodes(nodes: TreeNode[]): TreeNode[] {
   return files;
 }
 
+function expandPathAncestors(path: string): void {
+  const segments = path.split('/').filter(Boolean);
+  if (segments.length <= 1) {
+    return;
+  }
+
+  let currentPath = '';
+  for (let i = 0; i < segments.length - 1; i++) {
+    currentPath += `${segments[i]}/`;
+    expandedPaths.add(currentPath);
+  }
+}
+
 function isMarkdownWorkspaceFile(name: string): boolean {
   const lowerName = name.toLowerCase();
   return lowerName.endsWith('.slides.md') || lowerName.endsWith('.md') || lowerName.endsWith('.markdown');
@@ -384,6 +397,7 @@ async function openFirstMarkdownFile(): Promise<boolean> {
 
   activeFilePath = firstMarkdownNode.path;
   currentFileDir = getParentDirFromPath(firstMarkdownNode.path);
+  expandPathAncestors(firstMarkdownNode.path);
   renderTreeView();
   await openFile(firstMarkdownNode.handle as FileSystemFileHandle);
   return true;
@@ -907,6 +921,7 @@ $nextMarkdownBtn.addEventListener('click', async () => {
 
   currentFileDir = getParentDirFromPath(nextNode.path);
   activeFilePath = nextNode.path;
+  expandPathAncestors(nextNode.path);
   renderTreeView();
   await openFile(nextNode.handle as FileSystemFileHandle);
 });
@@ -988,6 +1003,7 @@ window.addEventListener('message', async (event: MessageEvent) => {
       });
       currentFileDir = dirPath;
       activeFilePath = resolved;
+      expandPathAncestors(resolved);
       renderTreeView();
       await openFile(handle, fragment);
       console.debug('[workspace] relative navigation opened file', {
@@ -1011,6 +1027,7 @@ window.addEventListener('message', async (event: MessageEvent) => {
 
     currentFileDir = getParentDirFromPath(nextNode.path);
     activeFilePath = nextNode.path;
+    expandPathAncestors(nextNode.path);
     renderTreeView();
     await openFile(nextNode.handle as FileSystemFileHandle);
     return;
@@ -1062,6 +1079,7 @@ async function restoreLastFile(filePath: string, fragment?: string): Promise<boo
     const fh = await dir.getFileHandle(fileName);
     currentFileDir = dirPath;
     activeFilePath = filePath;
+    expandPathAncestors(filePath);
     renderTreeView();
     await openFile(fh, fragment);
     return true;
